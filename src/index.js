@@ -1,16 +1,18 @@
 // https://docs.miva.com/miva-template-language
 
-// Constants
-
 // Literals
 const WHITESPACE = /\s/;
-const NUMBERS = /[0-9]/;
+const NUMBERS = /[0-9\.]/;
 const LETTERS = /[A-z]/;
 
 // Variables
 const VARIABLE_PREFIX = /[glsd]/;
 // TODO: Variables may consist of dashes -
 const VARIABLE_NAME = /[A-z_0-9\:\[\]]/;
+
+// This is used to let us know when we are in a miva tag
+// using this flag will let us avoid unwanted characters/noise
+let TAG_FLAG = false;
 
 function tokenizer(input) {
   // Error
@@ -22,7 +24,7 @@ function tokenizer(input) {
 
   // Iterate over input
   while (counter < input.length) {
-    // counter Character
+    // Counter character
     let char = input[counter];
 
     // Token Object
@@ -32,20 +34,108 @@ function tokenizer(input) {
     }
 
     // Miva Tags - Start
-    // Open Tag
+    // Open/Close Tag
     if (char === '<') {
       let value = '';
+      let valueToCompare = ' ';
+
+      // Default open tag
+      token.type = "open_tag";
       char = input[++counter];
 
-      while (char !== " ") {
+      // Close Tag
+      if (char === "/") {
+        char = input[++counter];
+        valueToCompare = ">"
+        token.type = "close_tag";
+      }
+
+      if (char === "m") {
         value += char;
         char = input[++counter];
       }
 
-      token.type = "open_tag";
+      if (char === "v") {
+        value += char;
+        char = input[++counter];
+      }
+
+      if (char === "t") {
+        value += char;
+        char = input[++counter];
+      }
+
+      // Not MVT
+      if (char !== ":") {
+        TAG_FLAG = false;
+        continue;
+      };
+
+      // MVT Tag
+      TAG_FLAG = true;
+
+      while (char !== valueToCompare) {
+        value += char;
+        char = input[++counter];
+
+        // mvt:else/elseif
+        // TODO: Too explicit or let theses be identified as something else?
+        if (value === "mvt:else") {
+          // mvt:else
+          if (char === ">") {
+            token.type = "else_tag";
+            valueToCompare = '>';
+          }
+
+          // mvt:elseif
+          if (char === "i") {
+            token.type = "elseif_tag";
+            valueToCompare = ' ';
+          }
+        }
+
+        // TODO: Do we care about comments?
+        if (value === "mvt:comment") {
+          token.type = "comment_tag";
+          valueToCompare = ">";
+        }
+      }
+
+      // mvt:if
+      if (value === "mvt:if") {
+        token.type = "if_tag";
+      }
+
+      // mvt:assign
+      if (value === "mvt:assign") {
+        token.type = "assign_tag";
+      }
+
+      // mvt:eval
+      if (value === "mvt:eval") {
+        token.type = "eval_tag";
+      }
+
+      // mvt:do
+      if (value === "mvt:do") {
+        token.type = "do_tag";
+      }
+
+      // Skip over this character
+      // TODO: Do we need?
+      if (char === ">") {
+        counter++;
+      }
+
       token.value = value;
       tokens.push(token);
 
+      continue;
+    }
+
+    // Don't continue unless we are in a miva tag
+    if (!TAG_FLAG) {
+      counter++;
       continue;
     }
 
@@ -70,23 +160,31 @@ function tokenizer(input) {
       continue;
     }
 
-    // Attributes
+    // Functions/Attributes
     if (LETTERS.test(char)) {
       let value = '';
+      let valueToCompare = "=";
 
-      while (char !== '=') {
+      // Default
+      token.type = "attribute";
+
+      while (char !== valueToCompare) {
         value += char;
         char = input[++counter];
+
+        // Functions
+        if (char === "(") {
+          token.type = "name";
+          valueToCompare = "(";
+        }
       }
 
-      token.type = "attribute";
       token.value = value;
       tokens.push(token);
       continue;
     }
     // Miva Tags - End
 
-    // Characters - Start
     // Equal
     if (char === '=') {
       token.type = "equal";
@@ -99,7 +197,16 @@ function tokenizer(input) {
     if (char === '"') {
       token.type = "quote";
       tokens.push(token);
-      counter++;
+
+      // Increase
+      char = input[++counter];
+
+      // Skip over this character
+      // TODO: Do we need?
+      if (char === ">") {
+        counter++;
+      }
+
       continue;
     }
 
@@ -110,7 +217,7 @@ function tokenizer(input) {
     }
 
     // Parenthesis
-    if (char === "(" || char === ")") {
+    if (char === '(' || char === ')') {
       token.type = "parentheses";
       tokens.push(token);
       counter++;
@@ -168,6 +275,7 @@ function tokenizer(input) {
       if (char === ">") {
         value += char;
         token.type = "self_close";
+        TAG_FLAG = false;
       }
 
       token.value = value;
@@ -217,6 +325,14 @@ function tokenizer(input) {
 
 // Tests
 let testNumber = `<mvt:assign name="l.variable" value="1" />`;
+let testMvtDo = `<mvt:do file="g.module_library_utilities" name="g.email_sent" value="SendEmail()"/>`;
+let testFunction = `<mvt:assign name="l.date" value="abs( 1.00 + 1
+ )" />`;
+let testCommment = `
+<mvt:comment>
+</mvt:comment>
+<mvt:assign name="l.variable" value="1" />
+`;
 let testString = `<mvt:assign name="l.variable" value="'Hello World'" />`;
 let testVariable = `<mvt:assign name="l.variable" value="g.woot" />`;
 let testVariableStruct = `<mvt:assign name="l.variable:woot" value="g.woot:noway" />`;
@@ -224,11 +340,27 @@ let testVariableArray = `<mvt:assign name="l.variable[1][2]" value="g.woot[1][3]
 let testNULL = `<mvt:assign name="l.variable" value="''" />`;
 let testExpression = `<mvt:assign name="l.variable" value="(1 / (2 + 1))" />`;
 let testCurrency = `<mvt:assign name="l.variable" value="'$1.00' $ 'Woot'" />`;
+let testIfStatement = `
+<mvt:if expr="1 + 2">
+</mvt:if>
+`;
+let testIfElseStatement = `
+<mvt:if expr="1 + 2">
+<mvt:else>
+</mvt:if>
+`;
+let testIfElseIfStatement = `
+<mvt:if expr="1 + 2">
+<mvt:elseif expr="1 + 2">
+<mvt:else>
+</mvt:if>
+`;
+let testTemplate = `
+<p>Hello World!</p>
+<mvt:assign name="l.variable" value="'$1.00' $ 'Woot'" />
+woot I can't believe this works
+<div>HELLO MANG WADDUP</div>
+<mvt:eval expr="l.empty + 1" />
+`;
 
-console.log(
-  // "NUMBER", tokenizer(testNumber),
-  // "\n\nSTRING", tokenizer(testString),
-  // "\n\nVARIABLE", tokenizer(testVariable),
-  // "\n\nNULL", tokenizer(testNULL),
-  "\n\nExpressions", tokenizer(testCurrency),
-)
+console.log(tokenizer(testFunction))
